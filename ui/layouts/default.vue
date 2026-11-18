@@ -52,6 +52,7 @@ const settingsSectionPages = {
   general: SettingsGeneralPage,
   appearance: SettingsAppearancePage,
   application: SettingsApplicationPage,
+  mcp: defineAsyncComponent(() => import("~/pages/setting/mcp.vue")),
   about: SettingsAboutPage
 } as const;
 const activeSettingsPage = computed(() => settingsSectionPages[activeSettingsSection.value] || SettingsAboutPage);

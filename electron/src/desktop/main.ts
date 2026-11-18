@@ -51,6 +51,7 @@ import { productNameAllowsDevTools } from "../shared/product-name";
 import { parseUrl, toFetchUrl } from "../shared/url";
 import { createWebProxyManager } from "@jumpserver/web-proxy/manager";
 import { resolveExecutablePath } from "./executable-path";
+import { McpPermissions } from "./mcp-permissions";
 
 const electronDir = __dirname;
 const appRoot = app.getAppPath();
@@ -82,6 +83,9 @@ let trayRecentConnections = [];
 let trayQuickConnectEnabled = false;
 let applicationConfig;
 let authService;
+const mcpPermissions = new McpPermissions(path.join(app.getPath("userData"), "mcp-permissions"), () =>
+  authService.currentSession()
+);
 let localApplicationLauncher;
 let offlineRecordings;
 let replayTranscoder;
@@ -1024,6 +1028,12 @@ async function handleInvoke(event, request) {
   }
   const { command, args = {}, options = {} } = request || {};
   const win = windowForEvent(event);
+
+  if (command === "mcp_permissions_load" || command === "mcp_permissions_save") {
+    const session = authService.currentSession();
+    if (session.sessionKey !== args.account || (session.orgId || "") !== args.org) throw new Error("MCP identity changed");
+    return command === "mcp_permissions_load" ? mcpPermissions.load() : mcpPermissions.save(args);
+  }
 
   if (command.startsWith("plugin:store|")) return handleStore(command, args);
   if (command === "plugin:event|listen") {

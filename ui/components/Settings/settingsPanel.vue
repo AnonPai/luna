@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from "@nuxt/ui";
 import type { SettingsSection } from "~/composables/useSettingsWindow";
+import mcpMessages from "~/features/mcp/messages.json";
 import { useUserInfoStore } from "~/store/modules/userInfo";
 
 const props = withDefaults(
@@ -17,6 +18,7 @@ const props = withDefaults(
 const route = useRoute();
 const localePath = useLocalePath();
 const { t } = useI18n();
+const { t: mcpText } = useI18n({ useScope: "local", messages: mcpMessages });
 const { isMacOS } = usePlatform();
 const { closeSettings, activeSection: inlineActiveSection } = useSettingsWindow();
 const userInfoStore = useUserInfoStore();
@@ -60,6 +62,15 @@ const sectionDefs = computed(() => {
       routeName: "setting-application",
       desktopOnly: true,
       authenticatedOnly: false
+    },
+    {
+      key: "mcp" as const,
+      label: mcpText("Mcp.Title"),
+      description: mcpText("Mcp.Description"),
+      icon: "i-lucide-settings-2",
+      routeName: "setting-mcp",
+      desktopOnly: true,
+      authenticatedOnly: true
     },
     {
       key: "about" as const,
@@ -117,12 +128,12 @@ watch(
   (value) => {
     if (!import.meta.client || value) return;
 
-    if (props.mode === "inline" && inlineActiveSection.value === "user") {
+    if (props.mode === "inline" && ["user", "mcp"].includes(inlineActiveSection.value)) {
       inlineActiveSection.value = "general";
       return;
     }
 
-    if (props.mode === "route" && route.path.startsWith("/setting/user")) {
+    if (props.mode === "route" && /^\/setting\/(?:user|mcp)(?:\/|$)/.test(route.path)) {
       void navigateTo(localePath({ name: "setting-general" }), { replace: true });
     }
   },
