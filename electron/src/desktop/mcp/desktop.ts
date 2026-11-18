@@ -5,7 +5,8 @@ import path from "node:path";
 import type { McpPermissions } from "../mcp-permissions";
 import { listenMcp } from "./http";
 import type { Call } from "./http";
-import { preapproved } from "../../../../shared/mcp/command-policy";
+import { isDiagnostic } from "../../../../shared/mcp/command-policy";
+import { reviewOperation } from "./reviewer";
 
 const limit = 1024 * 1024;
 interface Target {
@@ -15,7 +16,7 @@ interface Target {
   scope: string;
 }
 interface Job {
-  autoDiagnostics?: boolean;
+  authorizedBy?: "full" | "assisted";
   id: string;
   call: Call;
   scope: string;
@@ -39,7 +40,8 @@ export class DesktopMcp {
     private notify: (id: string) => void,
     private dialog: Dialog,
     private clipboard: Clipboard,
-    private port = 18761
+    private port = 18761,
+    private review = reviewOperation
   ) {}
   private scope() {
     try {
@@ -116,7 +118,7 @@ export class DesktopMcp {
           g.assetId === job.call.assetId &&
           g.accountId === job.call.accountId &&
           g.permissions.includes(job.call.op) &&
-          (!job.autoDiagnostics || preapproved(g.approvalMode, job.call.value))
+          (!job.authorizedBy || job.authorizedBy === g.approvalMode)
       ) ||
       this.scope() !== job.scope
     )
@@ -253,25 +255,31 @@ export class DesktopMcp {
         const { op, value, assetId, accountId } = j.call;
         const grant = (await this.policy.load()).grants.find((g) => g.assetId === assetId && g.accountId === accountId);
         if (!grant) throw new Error("Grant revoked");
-        if (op === "command" && preapproved(grant.approvalMode, value)) {
-          j.autoDiagnostics = true;
-          await this.checked(j);
-          return { ...j.call, autoDiagnostics: true };
+        const mode = grant.approvalMode;
+        if (op !== "command" || isDiagnostic(value)) {
+          if (mode === "full") j.authorizedBy = "full";
+          if (mode === "assisted" && (await this.review(j.call).catch(() => false))) j.authorizedBy = "assisted";
         }
-        const choice = await this.dialog.showMessageBox(win, {
-          type: "question",
-          buttons: ["取消", "允许这一次"],
-          defaultId: 0,
-          cancelId: 0,
-          message: op === "command" ? "确认当前终端位于空闲的 Linux shell 提示符，再执行命令" : "允许这次 SFTP 操作？",
-          detail: [`${grant.assetName} · ${assetId}`, `${grant.accountName} · ${accountId}`, op, value].join("\n")
-        });
-        if (choice.response !== 1) throw new Error("Declined in Luna");
+        await this.checked(j);
+        if (!j.authorizedBy) {
+          const choice = await this.dialog.showMessageBox(win, {
+            type: "question",
+            buttons: ["取消", "允许这一次"],
+            defaultId: 0,
+            cancelId: 0,
+            message:
+              op === "command" ? "确认当前终端位于空闲的 Linux shell 提示符，再执行命令" : "允许这次 SFTP 操作？",
+            detail: [`${grant.assetName} · ${assetId}`, `${grant.accountName} · ${accountId}`, op, value].join("\n")
+          });
+          if (choice.response !== 1) throw new Error("Declined in Luna");
+        }
+        await this.checked(j);
+        const targetLabel = `${grant.assetName} · ${grant.accountName} · ${value}`;
         let data: string | undefined;
         if (op === "upload") {
           const pick = await this.dialog.showOpenDialog(win, {
             properties: ["openFile"],
-            title: "选择上传文件（最多 1 MiB）"
+            title: `选择上传文件（最多 1 MiB） → ${targetLabel}`
           });
           if (pick.canceled) throw new Error("Upload cancelled");
           const file = await open(pick.filePaths[0], "r");
@@ -292,14 +300,14 @@ export class DesktopMcp {
           }
         } else if (op === "download") {
           const pick = await this.dialog.showSaveDialog(win, {
-            title: "选择新的下载文件名",
+            title: `选择新的下载文件名 ← ${targetLabel}`,
             defaultPath: path.posix.basename(value)
           });
           if (pick.canceled || !pick.filePath) throw new Error("Download cancelled");
           j.destination = pick.filePath;
         }
         await this.checked(j);
-        return { ...j.call, data };
+        return { ...j.call, data, autoDiagnostics: op === "command" && Boolean(j.authorizedBy) };
       } catch (e) {
         j.reject(e instanceof Error ? e : new Error("Request failed"));
         throw e;
@@ -339,7 +347,13 @@ export class DesktopMcp {
         };
       }
       await this.checked(j);
-      j.resolve({ assetId: j.call.assetId, accountId: j.call.accountId, operation: j.call.op, ...result });
+      j.resolve({
+        ...result,
+        assetId: j.call.assetId,
+        accountId: j.call.accountId,
+        operation: j.call.op,
+        approval: j.authorizedBy === "assisted" ? "agent" : j.authorizedBy === "full" ? "full" : "human"
+      });
     } catch (e) {
       j.reject(e instanceof Error ? e : new Error("File operation failed"));
       throw e;

@@ -138,7 +138,7 @@ function toggle(accountId: string, action: Action, checked: boolean) {
   draft.value = draft.value.filter((r) => r !== row);
   if (permissions.size)
     draft.value.push({
-      ...(row?.approvalMode && permissions.has("command") ? {approvalMode:row.approvalMode} : {}),
+      ...(row?.approvalMode ? {approvalMode:row.approvalMode} : {}),
       enabled,
       assetId: selected.value,
       assetName: details.value.name || selected.value,
@@ -252,7 +252,7 @@ onBeforeUnmount(() => {
             <div>
               <strong>{{ row.accountName }}</strong>
               <CommandApprovalSelect
-v-if="row.permissions.includes('command')" v-model="row.approvalMode"
+                v-model="row.approvalMode"
                 :disabled="saving || !row.enabled" @update:model-value="saved = false"
 />
               <p class="text-sm text-muted">{{ row.permissions.map((p) => t(`Mcp.${ p}`)).join(" · ") }}</p>

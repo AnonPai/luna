@@ -1,8 +1,11 @@
 export type ApprovalMode = "ask" | "assisted" | "full";
 
-const basic = ["hostname", "uptime"];
-export const diagnostics = [...basic, "uname -r", "whoami", "pwd", "date -u", "nproc", "free -m", "df -h /"];
-
-export function preapproved(mode: ApprovalMode | undefined, command: string) {
-  return (mode === "assisted" && basic.includes(command)) || (mode === "full" && diagnostics.includes(command));
+// Only options with defined, non-mutating semantics. In particular, hostname and
+// date can change the system when given other arguments. Never tokenize a shell script.
+export function isDiagnostic(command: string) {
+  return (
+    /^(?:hostname(?: -(?:s|f))?|uptime(?: -(?:p|s))?|uname(?: -[asnrvmo]+)?|whoami|pwd|date(?: -u)?|nproc|free(?: -(?:b|k|m|g|h))?|df(?: -(?:h|k|m|T))?(?: \/)?)$/.test(
+      command
+    ) && !/[\r\n]/.test(command)
+  );
 }

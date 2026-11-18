@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import type { ApprovalMode } from '../../../shared/mcp/command-policy';
-import { diagnostics } from '../../../shared/mcp/command-policy';
+import type { ApprovalMode } from "../../../shared/mcp/command-policy";
 defineProps<{ disabled: boolean }>();
 const mode = defineModel<ApprovalMode>();
 const { locale } = useI18n();
@@ -9,13 +8,13 @@ const id = useId();
 const choices = computed(() => [
   { value: "ask", label: zh.value ? "请求批准" : "Ask for approval" },
   { value: "assisted", label: zh.value ? "帮我批准" : "Approve for me" },
-  { value: "full", label: zh.value ? "完全访问（内置诊断）" : "Full access (built-in diagnostics)" }
+  { value: "full", label: zh.value ? "完全访问" : "Full access" }
 ]);
 </script>
 
 <template>
   <div class="mt-2 space-y-1">
-    <label :for="id" class="block text-sm">{{ zh ? "命令授权模式" : "Command approval mode" }}</label>
+    <label :for="id" class="block text-sm">{{ zh ? "操作授权模式" : "Operation approval mode" }}</label>
     <USelect
       :id="id"
       :model-value="mode || 'ask'"
@@ -25,15 +24,27 @@ const choices = computed(() => [
     />
     <p class="text-xs text-muted">
       <template v-if="!mode || mode === 'ask'">
-        {{ zh ? "每条命令均在 Luna 中确认。" : "Confirm each command in Luna." }}
+        {{ zh ? "每次操作均在 Luna 中确认。" : "Confirm each operation in Luna." }}
       </template>
       <template v-else>
-        {{ zh ? "免本地确认：" : "Without local approval: "
-        }}{{ mode === "assisted" ? "hostname, uptime" : diagnostics.join(", ") }}.
+        <template v-if="mode === 'assisted'">
+          {{
+            zh
+              ? "由本机 Codex 调用模型审核诊断命令或文件操作类型；要求人工或服务不可用时弹窗。"
+              : "Local Codex requests a model decision for diagnostics and file operations. A human reviews escalations and unavailable decisions."
+          }}
+        </template>
+        <template v-else>
+          {{
+            zh
+              ? "已授权的只读诊断、日志读取和防覆盖传输直接放行。"
+              : "Granted read-only diagnostics, log reads and no-overwrite transfers proceed directly."
+          }}
+        </template>
         {{
           zh
-            ? "其他命令逐次确认。JumpServer 审批仍然生效。"
-            : "Other commands require confirmation. JumpServer approvals still apply."
+            ? "删除和影响不明的 Shell 命令必须人工审核。传输时仍需选本地文件。JumpServer 审批继续生效。"
+            : "Deletion and unclassified shell commands require human approval. Transfers still use the file picker. JumpServer approvals remain in effect."
         }}
       </template>
     </p>

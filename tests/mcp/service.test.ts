@@ -17,7 +17,7 @@ afterEach(async () => {
   for (const f of clean.splice(0).reverse()) await f();
   vi.clearAllMocks();
 });
-async function setup() {
+async function setup(review = vi.fn(async (call: { value: string }) => call.value === "hostname")) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "luna-local-mcp-"));
   clean.push(() => rm(dir, { recursive: true, force: true }));
   const identity = { origin: "https://fixture.invalid", sessionKey: "test-user", orgId: "org" };
@@ -139,7 +139,8 @@ async function setup() {
     },
     mock.dialog as any,
     mock.clipboard as any,
-    0
+    0,
+    review
   );
   clean.push(() => service.reset());
   await service.observe(
@@ -222,6 +223,8 @@ it("applies the saved mode to exact commands and returns diagnostic output witho
     ["assisted", "hostname", true],
     ["assisted", "uname -r", false],
     ["full", "uname -r", true],
+    ["full", "free -h", true],
+    ["full", "date -s tomorrow", false],
     ["full", "hostname && uptime", false],
     ["ask", "hostname", false]
   ] as const) {
@@ -241,6 +244,33 @@ it("applies the saved mode to exact commands and returns diagnostic output witho
   }
 });
 
+it("routes the same eligible request by Agent verdict and falls back on reviewer failure", async () => {
+  const review = vi.fn(async (_call: { value: string }) => true);
+  const s = await setup(review);
+  const p = await s.policy.load();
+  await s.policy.save({ ...p, grants: p.grants.map((g) => ({ ...g, approvalMode: "assisted" })) });
+  const path = "/var/log/test.log";
+  expect((await s.call("read_log", { path })).status).toBe("read");
+  expect(mock.dialog.showMessageBox).not.toHaveBeenCalled();
+  review.mockResolvedValueOnce(false).mockRejectedValueOnce(new Error("review offline"));
+  for (let i = 0; i < 2; i++) {
+    mock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
+    expect((await s.call("read_log", { path })).error).toMatch(/declined/i);
+  }
+  mock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
+  expect((await s.call("run_command", { command: "rm ./fixture" })).error).toMatch(/declined/i);
+  expect(review).toHaveBeenCalledTimes(3);
+  const next = await s.policy.load();
+  await s.policy.save({ ...next, grants: next.grants.map((g) => ({ ...g, approvalMode: "full" })) });
+  mock.dialog.showMessageBox.mockClear();
+  expect((await s.call("sftp_upload", { path: "/tmp/fixture.bin" })).bytes).toBe(4);
+  expect((await s.call("sftp_download", { path: "/tmp/fixture.bin" })).bytes).toBe(4);
+  expect(mock.dialog.showSaveDialog).toHaveBeenCalledTimes(1);
+  expect(mock.dialog.showOpenDialog).toHaveBeenCalledTimes(1);
+  expect(mock.dialog.showMessageBox).not.toHaveBeenCalled();
+  expect(review).toHaveBeenCalledTimes(3);
+});
+
 it.each(["ask", "assisted", "full"] as const)(
   "requires a fresh human decision for deletion in %s mode",
   async (approvalMode) => {
@@ -248,7 +278,7 @@ it.each(["ask", "assisted", "full"] as const)(
     const p = await s.policy.load();
     await s.policy.save({ ...p, grants: p.grants.map((g) => ({ ...g, approvalMode })) });
     const remove = "rm -- /tmp/luna-fixture.txt";
-    for (const command of [remove, "hostname; " + remove, "sh ./cleanup.sh", "truncate -s 0 /tmp/luna-fixture.txt"]) {
+    for (const command of [remove, `hostname; ${remove}`, "sh ./cleanup.sh", "truncate -s 0 /tmp/luna-fixture.txt"]) {
       mock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
       const result = await s.call("run_command", { command });
       expect(result.error).toMatch(/declined/i);
@@ -264,7 +294,7 @@ it.each(["ask", "assisted", "full"] as const)(
     await s.call("run_command", { command: remove });
     mock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
     expect((await s.call("run_command", { command: remove })).error).toMatch(/declined/i);
-    expect(s.sent).toEqual([remove + "\r"]);
+    expect(s.sent).toEqual([`${remove}\r`]);
   }
 );
 

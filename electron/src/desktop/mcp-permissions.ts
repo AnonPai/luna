@@ -36,9 +36,7 @@ function checkedGrants(value: unknown): Grant[] {
     if (seen.has(key)) throw new Error("Duplicate MCP grant");
     seen.add(key);
     return {
-      ...(row.permissions.includes("command") && (row.approvalMode === "assisted" || row.approvalMode === "full")
-        ? { approvalMode: row.approvalMode }
-        : {}),
+      ...(row.approvalMode === "assisted" || row.approvalMode === "full" ? { approvalMode: row.approvalMode } : {}),
       enabled: row.enabled,
       assetId: row.assetId,
       assetName: row.assetName,
@@ -68,7 +66,10 @@ export class McpPermissions {
     try {
       const data = JSON.parse(await readFile(path.join(this.directory, `${scope}.json`), "utf8"));
       if (typeof data.revision !== "string") throw new Error("Invalid MCP revision");
-      return { revision: data.revision, grants: checkedGrants(data.grants) };
+      const grants = checkedGrants(data.grants);
+      // Older modes covered commands only. Require a new selection before applying them to file operations.
+      if (data.modeVersion !== 2) for (const grant of grants) delete grant.approvalMode;
+      return { revision: data.revision, grants };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { revision: "", grants: [] };
       throw error;
@@ -94,7 +95,7 @@ export class McpPermissions {
       const filename = path.join(this.directory, `${scope}.json`);
       const temp = `${filename}.${policy.revision}.tmp`;
       try {
-        await writeFile(temp, JSON.stringify(policy), { flag: "wx", mode: 0o600 });
+        await writeFile(temp, JSON.stringify({ ...policy, modeVersion: 2 }), { flag: "wx", mode: 0o600 });
         if (scope !== this.scope()) throw new Error("MCP identity changed");
         await rename(temp, filename);
       } finally {

@@ -1,6 +1,6 @@
 import type { Terminal } from "@xterm/xterm";
 import type { Run } from "./sessions";
-import { diagnostics } from "../../../shared/mcp/command-policy";
+import { isDiagnostic } from "../../../shared/mcp/command-policy";
 
 function currentInput(term: Terminal) {
   const b = term.buffer.active;
@@ -15,7 +15,7 @@ async function diagnostic(term: Terminal, value: string, send: (text: string) =>
   await check();
   const prompt = currentInput(term);
   if (
-    !diagnostics.includes(value) ||
+    !isDiagnostic(value) ||
     term.buffer.active.type !== "normal" ||
     !/^[\w.-]+@[\w.-]+:[^\r\n#$]*[#$] $/.test(prompt) ||
     term.buffer.active.cursorX + value.length >= term.cols

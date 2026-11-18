@@ -12,7 +12,7 @@ export interface Call {
 const names = { command: "run_command", logs: "read_log", upload: "sftp_upload", download: "sftp_download" };
 const descriptions = {
   command:
-    "Submit one command to the selected live Linux terminal. A person confirms dispatch and reports the observed outcome in Luna.",
+    "Submit one command to the selected live Linux terminal. Local approval follows the saved grant. Destructive or unclassified shell requires a person. The result identifies the approval route.",
   logs: "Read the last 100 lines of a regular text log under /var/log via the selected SFTP session (up to 1 MiB).",
   upload: "Upload a file chosen in Luna to a new absolute SFTP path (up to 1 MiB).",
   download: "Download a regular file via SFTP to a new local file chosen in Luna (up to 1 MiB)."

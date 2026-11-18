@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -43,7 +43,22 @@ test("asset can be disabled or revoked", async (t) => {
   assert.deepEqual((await policy.load()).grants, []);
 });
 
-test("approval mode is opt-in, account scoped and requires a command grant", async (t) => {
+test("old command-only modes cannot silently grant unattended file operations", async (t) => {
+  const { policy, initial, grant, directory } = await fixture(t);
+  const saved = await policy.save({
+    ...initial,
+    grants: [{ ...grant, permissions: ["command", "logs"], approvalMode: "full" }]
+  });
+  const file = path.join(directory, `${saved.scope}.json`);
+  const legacy = JSON.parse(await readFile(file, "utf8"));
+  delete legacy.modeVersion;
+  await writeFile(file, JSON.stringify(legacy));
+  const restored = await policy.load();
+  assert.equal(restored.grants[0].approvalMode, undefined);
+  assert.deepEqual(restored.grants[0].permissions, ["command", "logs"]);
+});
+
+test("approval mode is opt-in and account scoped for command and file grants", async (t) => {
   const { policy, initial, grant, directory, state } = await fixture(t);
   await policy.save({
     ...initial,
@@ -57,7 +72,7 @@ test("approval mode is opt-in, account scoped and requires a command grant", asy
   const saved = await new McpPermissions(directory, () => state).load();
   assert.deepEqual(
     saved.grants.map((g) => g.approvalMode ?? "ask"),
-    ["full", "ask", "ask", "ask"]
+    ["full", "ask", "full", "ask"]
   );
 });
 
