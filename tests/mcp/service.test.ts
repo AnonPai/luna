@@ -241,6 +241,33 @@ it("applies the saved mode to exact commands and returns diagnostic output witho
   }
 });
 
+it.each(["ask", "assisted", "full"] as const)(
+  "requires a fresh human decision for deletion in %s mode",
+  async (approvalMode) => {
+    const s = await setup();
+    const p = await s.policy.load();
+    await s.policy.save({ ...p, grants: p.grants.map((g) => ({ ...g, approvalMode })) });
+    const remove = "rm -- /tmp/luna-fixture.txt";
+    for (const command of [remove, "hostname; " + remove, "sh ./cleanup.sh", "truncate -s 0 /tmp/luna-fixture.txt"]) {
+      mock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
+      const result = await s.call("run_command", { command });
+      expect(result.error).toMatch(/declined/i);
+      expect(mock.dialog.showMessageBox.mock.lastCall?.[1]).toMatchObject({
+        defaultId: 0,
+        cancelId: 0,
+        detail: expect.stringContaining(command)
+      });
+      expect(s.sent).toEqual([]);
+    }
+    // Approve a single request against the simulated terminal, then decline the same command.
+    mock.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 });
+    await s.call("run_command", { command: remove });
+    mock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
+    expect((await s.call("run_command", { command: remove })).error).toMatch(/declined/i);
+    expect(s.sent).toEqual([remove + "\r"]);
+  }
+);
+
 it("checks account, operation, live server permission and human rejection before dispatch", async () => {
   const s = await setup();
   expect((await s.call("run_command", { accountId: "root", command: "hostname" })).error).toMatch(/grant/i);
