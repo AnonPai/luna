@@ -2,6 +2,7 @@ import { desktopInvoke, desktopListen } from "~/shared/desktop/bridge";
 import { isElectronRuntime } from "~/utils/runtime";
 
 interface Request {
+  autoDiagnostics?: boolean;
   op: "command" | "logs" | "upload" | "download";
   value: string;
   data?: string;

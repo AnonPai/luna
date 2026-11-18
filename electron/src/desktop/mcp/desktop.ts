@@ -5,6 +5,7 @@ import path from "node:path";
 import type { McpPermissions } from "../mcp-permissions";
 import { listenMcp } from "./http";
 import type { Call } from "./http";
+import { preapproved } from "../../../../shared/mcp/command-policy";
 
 const limit = 1024 * 1024;
 interface Target {
@@ -14,6 +15,7 @@ interface Target {
   scope: string;
 }
 interface Job {
+  autoDiagnostics?: boolean;
   id: string;
   call: Call;
   scope: string;
@@ -103,12 +105,19 @@ export class DesktopMcp {
     );
   }
   private async checked(job: Job) {
+    const grants = (await this.policy.load()).grants;
     if (
       this.job !== job ||
       !this.live(this.generation) ||
       this.identity !== job.scope ||
-      !(await this.policy.permits(job.call.assetId, job.call.accountId, job.call.op)) ||
-      this.job !== job ||
+      !grants.some(
+        (g) =>
+          g.enabled &&
+          g.assetId === job.call.assetId &&
+          g.accountId === job.call.accountId &&
+          g.permissions.includes(job.call.op) &&
+          (!job.autoDiagnostics || preapproved(g.approvalMode, job.call.value))
+      ) ||
       this.scope() !== job.scope
     )
       throw new Error("MCP grant or session expired");
@@ -145,7 +154,7 @@ export class DesktopMcp {
     if (!tokens.length) throw new Error("Open the matching Luna SSH or SFTP session first");
     return new Promise((resolve, reject) => {
       const id = randomUUID();
-      let timer:ReturnType<typeof setTimeout>;
+      let timer: ReturnType<typeof setTimeout>;
       const fail = (e: Error) => {
         clearTimeout(timer);
         if (this.job?.id === id) this.job = undefined;
@@ -212,7 +221,7 @@ export class DesktopMcp {
     if (!j || j.id !== args.id || j.owner !== win) throw new Error("Expired request");
     try {
       await this.checked(j);
-    } catch(error) {
+    } catch (error) {
       j.reject(new Error("MCP grant or session expired; in-flight outcome unknown"));
       throw error;
     }
@@ -244,6 +253,11 @@ export class DesktopMcp {
         const { op, value, assetId, accountId } = j.call;
         const grant = (await this.policy.load()).grants.find((g) => g.assetId === assetId && g.accountId === accountId);
         if (!grant) throw new Error("Grant revoked");
+        if (op === "command" && preapproved(grant.approvalMode, value)) {
+          j.autoDiagnostics = true;
+          await this.checked(j);
+          return { ...j.call, autoDiagnostics: true };
+        }
         const choice = await this.dialog.showMessageBox(win, {
           type: "question",
           buttons: ["取消", "允许这一次"],

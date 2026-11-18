@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { ApprovalMode } from "../../../shared/mcp/command-policy";
 
 export const operations = ["command", "logs", "upload", "download"] as const;
 type Operation = (typeof operations)[number];
 type Grant = {
+  approvalMode?: ApprovalMode;
   enabled: boolean;
   assetId: string;
   assetName: string;
@@ -34,6 +36,9 @@ function checkedGrants(value: unknown): Grant[] {
     if (seen.has(key)) throw new Error("Duplicate MCP grant");
     seen.add(key);
     return {
+      ...(row.permissions.includes("command") && (row.approvalMode === "assisted" || row.approvalMode === "full")
+        ? { approvalMode: row.approvalMode }
+        : {}),
       enabled: row.enabled,
       assetId: row.assetId,
       assetName: row.assetName,

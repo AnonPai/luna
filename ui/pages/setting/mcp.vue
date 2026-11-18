@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import type { ApprovalMode } from "../../../shared/mcp/command-policy";
 import type { AssetDetail } from "~/types";
 import { getAssetDetailRequest, getAuthorizedAssets } from "~/composables/useApiRequest";
+import CommandApprovalSelect from "~/features/mcp/CommandApprovalSelect.vue";
 import messages from "~/features/mcp/messages.json";
 import McpServiceControl from "~/features/mcp/ServiceControl.vue";
 import { desktopInvoke } from "~/shared/desktop/bridge";
@@ -9,6 +11,7 @@ import { useUserInfoStore } from "~/store/modules/userInfo";
 const actions = ["command", "logs", "upload", "download"] as const;
 type Action = (typeof actions)[number];
 interface Grant {
+  approvalMode?: ApprovalMode;
   enabled: boolean;
   assetId: string;
   assetName: string;
@@ -135,6 +138,7 @@ function toggle(accountId: string, action: Action, checked: boolean) {
   draft.value = draft.value.filter((r) => r !== row);
   if (permissions.size)
     draft.value.push({
+      ...(row?.approvalMode && permissions.has("command") ? {approvalMode:row.approvalMode} : {}),
       enabled,
       assetId: selected.value,
       assetName: details.value.name || selected.value,
@@ -247,6 +251,10 @@ onBeforeUnmount(() => {
           >
             <div>
               <strong>{{ row.accountName }}</strong>
+              <CommandApprovalSelect
+v-if="row.permissions.includes('command')" v-model="row.approvalMode"
+                :disabled="saving || !row.enabled" @update:model-value="saved = false"
+/>
               <p class="text-sm text-muted">{{ row.permissions.map((p) => t(`Mcp.${ p}`)).join(" · ") }}</p>
             </div>
             <UButton

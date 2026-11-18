@@ -43,6 +43,24 @@ test("asset can be disabled or revoked", async (t) => {
   assert.deepEqual((await policy.load()).grants, []);
 });
 
+test("approval mode is opt-in, account scoped and requires a command grant", async (t) => {
+  const { policy, initial, grant, directory, state } = await fixture(t);
+  await policy.save({
+    ...initial,
+    grants: [
+      { ...grant, permissions: ["command"], approvalMode: "full" },
+      { ...grant, accountId: "other", permissions: ["command"] },
+      { ...grant, accountId: "reader", approvalMode: "full" },
+      { ...grant, accountId: "unknown-mode", permissions: ["command"], approvalMode: "invalid" }
+    ]
+  });
+  const saved = await new McpPermissions(directory, () => state).load();
+  assert.deepEqual(
+    saved.grants.map((g) => g.approvalMode ?? "ask"),
+    ["full", "ask", "ask", "ask"]
+  );
+});
+
 test("switching site, account or organization isolates grants and rejects stale editors; logout denies access", async (t) => {
   const { policy, initial, grant, state } = await fixture(t);
   const saved = await policy.save({ ...initial, grants: [grant] });

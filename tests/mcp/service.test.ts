@@ -80,15 +80,25 @@ async function setup() {
               .map((f) => ({ name: path.posix.basename(f), is_dir: false, perm: "-" })) as any)
   );
   const term = {
+    cols: 100,
     buffer: {
       active: { type: "normal", cursorX: 0, baseY: 0, cursorY: 0, getLine: () => ({ translateToString: () => screen }) }
     },
     registerMarker: () => ({ line: 0, isDisposed: false, dispose: () => {} })
   };
+  let diagnosticScreen = false;
+  const prompt = "ops@host:~$ ";
   const terminalRun = mcpTerminalOperation(
     () => term as any,
     (text) => {
       sent.push(text);
+      if (diagnosticScreen) {
+        term.buffer.active.cursorY = 2;
+        term.buffer.active.getLine = ((line: number) => ({
+          translateToString: (_trim: boolean, start = 0, end?: number) =>
+            [prompt + text.trimEnd(), "fixture-output", prompt][line]!.slice(start, end)
+        })) as typeof term.buffer.active.getLine;
+      }
       screen =
         (
           { "hostname\r": "fixture-linux", "uptime\r": "up 3 days", "false\r": "fixture failure" } as Record<
@@ -164,7 +174,15 @@ async function setup() {
     const body: any = await r.json();
     return JSON.parse(body.result.content[0].text);
   }
-  return { rpc, call, service, policy, win, sent, auth, dest, data, identity };
+  function idleShell() {
+    diagnosticScreen = true;
+    term.buffer.active.cursorX = prompt.length;
+    term.buffer.active.cursorY = 0;
+    term.buffer.active.getLine = () => ({
+      translateToString: (_trim?: boolean, start = 0, end?: number) => prompt.slice(start, end)
+    });
+  }
+  return { rpc, call, service, policy, win, sent, auth, dest, data, identity, idleShell };
 }
 
 it("requires local auth, rejects foreign origins, negotiates MCP and invalidates credentials on reset", async () => {
@@ -198,6 +216,31 @@ it("dispatches hostname and uptime; preserves reported failure and denial withou
   }
   expect(s.sent).toEqual(["hostname\r", "uptime\r", "false\r", "restricted\r"]);
 });
+it("applies the saved mode to exact commands and returns diagnostic output without either local prompt", async () => {
+  const s = await setup();
+  for (const [mode, command, automatic] of [
+    ["assisted", "hostname", true],
+    ["assisted", "uname -r", false],
+    ["full", "uname -r", true],
+    ["full", "hostname && uptime", false],
+    ["ask", "hostname", false]
+  ] as const) {
+    const p = await s.policy.load();
+    await s.policy.save({ ...p, grants: p.grants.map((g) => ({ ...g, approvalMode: mode })) });
+    s.idleShell();
+    mock.dialog.showMessageBox.mockClear();
+    if (!automatic) mock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
+    const result = await s.call("run_command", { command });
+    if (automatic) {
+      expect(mock.dialog.showMessageBox).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: "output_observed", output: "fixture-output", exitCode: null });
+    } else {
+      expect(mock.dialog.showMessageBox).toHaveBeenCalledTimes(1);
+      expect(result.error).toMatch(/declined/i);
+    }
+  }
+});
+
 it("checks account, operation, live server permission and human rejection before dispatch", async () => {
   const s = await setup();
   expect((await s.call("run_command", { accountId: "root", command: "hostname" })).error).toMatch(/grant/i);
@@ -224,13 +267,13 @@ it("reads a log, round trips binary files, rejects path traversal and preserves 
 it("enforces read-only grants and rechecks a grant revoked during the native confirmation", async () => {
   const s = await setup();
   const p = await s.policy.load();
-  await s.policy.save({ ...p, grants: p.grants.map(g => ({ ...g, permissions: ["logs"] })) });
+  await s.policy.save({ ...p, grants: p.grants.map((g) => ({ ...g, permissions: ["logs"] })) });
   expect((await s.call("sftp_download", { path: "/var/log/test.log" })).error).toMatch(/grant/i);
-  expect((await s.call("run_command", {command: "hostname"})).error).toMatch(/grant/i);
+  expect((await s.call("run_command", { command: "hostname" })).error).toMatch(/grant/i);
   mock.dialog.showMessageBox.mockImplementationOnce(async () => {
-    await s.policy.save({ ...await s.policy.load(), grants: [] });
+    await s.policy.save({ ...(await s.policy.load()), grants: [] });
     return { response: 1 };
   });
-  expect((await s.call("read_log", {path:"/var/log/test.log"})).error).toMatch(/expired/i);
+  expect((await s.call("read_log", { path: "/var/log/test.log" })).error).toMatch(/expired/i);
   expect(s.sent).toEqual([]);
 });
