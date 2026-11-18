@@ -38,9 +38,9 @@ export async function reviewOperation(call: Call): Promise<boolean> {
         ? JSON.stringify(call.value)
         : {
             logs: "Read the tail of an authorized UTF-8 log. The path and contents are withheld.",
-            upload: "Upload a file chosen by the human to a new remote path. Existing destinations are skipped.",
+            upload: "Upload a file staged in the scoped upload directory to a new remote path. Existing destinations are skipped.",
             download:
-              "Download one remote file to a new path chosen by the human. The remote path and contents are withheld."
+              "Download one remote file to a new file in the scoped download directory. The remote path and contents are withheld."
           }[call.op]
     ].join("\n");
     const args = [

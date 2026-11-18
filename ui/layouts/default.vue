@@ -13,9 +13,12 @@ import {
 import { desktopInvoke, desktopListen, desktopWindow } from "~/shared/desktop/bridge";
 import { useUserInfoStore } from "~/store/modules/userInfo";
 
+import { useMcpWorkspace } from "~/features/mcp/sessions";
+
 const AiOverlayPanel = defineAsyncComponent(() => import("~/components/RightPanel/AiOverlayPanel.vue"));
 
 const { initialTheme, listenOSThemeChange } = useThemeAdapter();
+useMcpWorkspace();
 const { isMacOS, isWindows } = usePlatform();
 const { activeWorkspaceMode, uiWorkspaceMode, isUtilityRoute, isVideoPlayerRoute } = useWorkspaceMode();
 const { activeTabId, closeSession, enterFocusMode, exitFocusMode, focusMode, openLocalShell, registerSessionDisposer } =

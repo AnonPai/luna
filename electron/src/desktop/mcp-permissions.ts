@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ApprovalMode } from "../../../shared/mcp/command-policy";
 
@@ -68,7 +68,7 @@ export class McpPermissions {
       if (typeof data.revision !== "string") throw new Error("Invalid MCP revision");
       const grants = checkedGrants(data.grants);
       // Older modes covered commands only. Require a new selection before applying them to file operations.
-      if (data.modeVersion !== 2) for (const grant of grants) delete grant.approvalMode;
+      if (data.modeVersion !== 3) for (const grant of grants) delete grant.approvalMode;
       return { revision: data.revision, grants };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { revision: "", grants: [] };
@@ -95,7 +95,7 @@ export class McpPermissions {
       const filename = path.join(this.directory, `${scope}.json`);
       const temp = `${filename}.${policy.revision}.tmp`;
       try {
-        await writeFile(temp, JSON.stringify({ ...policy, modeVersion: 2 }), { flag: "wx", mode: 0o600 });
+        await writeFile(temp, JSON.stringify({ ...policy, modeVersion: 3 }), { flag: "wx", mode: 0o600 });
         if (scope !== this.scope()) throw new Error("MCP identity changed");
         await rename(temp, filename);
       } finally {
@@ -116,5 +116,20 @@ export class McpPermissions {
       (row) =>
         row.enabled && row.assetId === assetId && row.accountId === accountId && row.permissions.includes(operation)
     );
+  }
+
+  async transferFolder(assetId: string, accountId: string, operation: "upload" | "download") {
+    const scope = this.scope();
+    const key = createHash("sha256")
+      .update(JSON.stringify([scope, assetId, accountId]))
+      .digest("hex");
+    let dir = await realpath(this.directory);
+    for (const part of ["transfers", key, operation]) {
+      dir = path.join(dir, part);
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      if (path.relative(dir, await realpath(dir))) throw new Error("Transfer folder must not be redirected");
+    }
+    if (scope !== this.scope()) throw new Error("MCP identity changed");
+    return dir;
   }
 }

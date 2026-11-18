@@ -17,7 +17,7 @@ afterEach(async () => {
   for (const f of clean.splice(0).reverse()) await f();
   vi.clearAllMocks();
 });
-async function setup(review = vi.fn(async (call: { value: string }) => call.value === "hostname")) {
+async function setup(review = vi.fn(async (call: { value: string }) => call.value === "hostname"), cold = false) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "luna-local-mcp-"));
   clean.push(() => rm(dir, { recursive: true, force: true }));
   const identity = { origin: "https://fixture.invalid", sessionKey: "test-user", orgId: "org" };
@@ -42,9 +42,11 @@ async function setup(review = vi.fn(async (call: { value: string }) => call.valu
   let screen = "";
   const digest = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
   const data = Buffer.from([0, 10, 255, 42]);
-  const local = path.join(dir, "input.bin");
-  const dest = path.join(dir, "output.bin");
+  const staging = await policy.transferFolder("linux", "ops", "upload");
+  const local = path.join(staging, "test.bin");
+  const dest = path.join(await policy.transferFolder("linux", "ops", "download"), "test.bin");
   await writeFile(local, data);
+  await writeFile(path.join(staging, "fixture.bin"), data);
   mock.dialog.showMessageBox.mockResolvedValue({ response: 1 });
   mock.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [local] });
   mock.dialog.showSaveDialog.mockResolvedValue({ canceled: false, filePath: dest });
@@ -117,6 +119,7 @@ async function setup(review = vi.fn(async (call: { value: string }) => call.valu
       remove: () => {}
     } as any
   );
+  const opened: string[] = [];
   const service = new DesktopMcp(
     policy,
     () => auth,
@@ -125,6 +128,21 @@ async function setup(review = vi.fn(async (call: { value: string }) => call.valu
         let token;
         try {
           token = await service.control("mcp_find", { id, tokens: ["ssh-token", "sftp-token"] }, win);
+          if (!token && cold) {
+            const target = await service.control("mcp_open_target", { id }, win);
+            opened.push(target.protocol);
+            await service.control("mcp_open_check", { id }, win);
+            const fresh = `${target.protocol  }-token`;
+            await service.observe(
+              {
+                method: "POST",
+                path: "/api/v1/authentication/connection-token/",
+                body: { asset: target.assetId, account: target.accountId, protocol: target.protocol }
+              },
+              async () => ({ id: fresh })
+            );
+            token = await service.control("mcp_find", { id, tokens: [fresh] }, win);
+          }
           const args = { id, token };
           const call = await service.control("mcp_claim", args, win);
           const check = async () => {
@@ -143,14 +161,15 @@ async function setup(review = vi.fn(async (call: { value: string }) => call.valu
     review
   );
   clean.push(() => service.reset());
-  await service.observe(
-    {
-      method: "POST",
-      path: "/api/v1/authentication/connection-token/",
-      body: { asset: "linux", account: "ops", protocol: "ssh" }
-    },
-    async () => ({ id: "ssh-token" })
-  );
+  if (!cold)
+    await service.observe(
+      {
+        method: "POST",
+        path: "/api/v1/authentication/connection-token/",
+        body: { asset: "linux", account: "ops", protocol: "ssh" }
+      },
+      async () => ({ id: "ssh-token" })
+    );
   await service.observe(
     { method: "POST", path: "/api/v1/authentication/connection-token/exchange/", body: { id: "ssh-token" } },
     async () => ({ id: "sftp-token" })
@@ -183,9 +202,22 @@ async function setup(review = vi.fn(async (call: { value: string }) => call.valu
       translateToString: (_trim?: boolean, start = 0, end?: number) => prompt.slice(start, end)
     });
   }
-  return { rpc, call, service, policy, win, sent, auth, dest, data, identity, idleShell };
+  return { rpc, call, service, policy, win, sent, auth, dest, data, identity, idleShell, opened };
 }
 
+it("opens only the requested granted protocol on first use and reuses the resulting binding", async () => {
+  const s = await setup(undefined, true);
+  expect((await s.call("run_command", { command: "hostname", accountId: "other" })).error).toMatch(/grant/i);
+  expect(s.opened).toEqual([]);
+  const p = await s.policy.load();
+  await s.policy.save({ ...p, grants: p.grants.map((g) => ({ ...g, approvalMode: "full" })) });
+  s.idleShell();
+  expect((await s.call("run_command", { command: "hostname" })).approval).toBe("full");
+  expect((await s.call("read_log", { path: "/var/log/test.log" })).status).toBe("read");
+  expect((await s.call("read_log", { path: "/var/log/test.log" })).status).toBe("read");
+  expect(s.opened).toEqual(["ssh", "sftp"]);
+  expect(mock.dialog.showMessageBox).not.toHaveBeenCalled();
+});
 it("requires local auth, rejects foreign origins, negotiates MCP and invalidates credentials on reset", async () => {
   const s = await setup();
   expect((await s.rpc("tools/list", {}, { authorization: "Bearer wrong" })).status).toBe(401);
@@ -265,8 +297,8 @@ it("routes the same eligible request by Agent verdict and falls back on reviewer
   mock.dialog.showMessageBox.mockClear();
   expect((await s.call("sftp_upload", { path: "/tmp/fixture.bin" })).bytes).toBe(4);
   expect((await s.call("sftp_download", { path: "/tmp/fixture.bin" })).bytes).toBe(4);
-  expect(mock.dialog.showSaveDialog).toHaveBeenCalledTimes(1);
-  expect(mock.dialog.showOpenDialog).toHaveBeenCalledTimes(1);
+  expect(mock.dialog.showSaveDialog).not.toHaveBeenCalled();
+  expect(mock.dialog.showOpenDialog).not.toHaveBeenCalled();
   expect(mock.dialog.showMessageBox).not.toHaveBeenCalled();
   expect(review).toHaveBeenCalledTimes(3);
 });

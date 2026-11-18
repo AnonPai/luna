@@ -14,8 +14,10 @@ const descriptions = {
   command:
     "Submit one command to the selected live Linux terminal. Local approval follows the saved grant. Destructive or unclassified shell requires a person. The result identifies the approval route.",
   logs: "Read the last 100 lines of a regular text log under /var/log via the selected SFTP session (up to 1 MiB).",
-  upload: "Upload a file chosen in Luna to a new absolute SFTP path (up to 1 MiB).",
-  download: "Download a regular file via SFTP to a new local file chosen in Luna (up to 1 MiB)."
+  upload:
+    "Upload the file with the same basename from the grant's uploadDir to a new SFTP path (up to 1 MiB). Use list_grants for uploadDir.",
+  download:
+    "Download a regular SFTP file into the grant's downloadDir with its original basename (up to 1 MiB, no overwrite)."
 };
 const str = { type: "string" };
 const empty = { type: "object", properties: {}, additionalProperties: false };
@@ -70,6 +72,15 @@ export function parseCall(name: string, args: Record<string, unknown>): Call {
   )
     throw new Error("Use an absolute POSIX file path");
   if (op === "logs" && !value.startsWith("/var/log/")) throw new Error("Log files must be under /var/log");
+  if (op === "upload" || op === "download") {
+    const name = value.split("/").pop()!;
+    if (
+      !/^[\p{L}\p{N}_-][\p{L}\p{N}_. -]{0,199}$/u.test(name) ||
+      /[. ]$/.test(name) ||
+      /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?: *\.|$)/i.test(name)
+    )
+      throw new Error("Unsupported Windows file name");
+  }
   return { op, assetId, accountId, value };
 }
 
@@ -135,8 +146,11 @@ export async function listenMcp(
           ? await grants()
           : await execute(parseCall(msg.params?.name, msg.params?.arguments));
       if (!active()) return end(401);
-      const status=typeof data==="object" && data && "status" in data ? data.status : "";
-      return result({ isError: status==="operator_reported_failure" || status==="operator_reported_policy_denied", content: content(data) });
+      const status = typeof data === "object" && data && "status" in data ? data.status : "";
+      return result({
+        isError: status === "operator_reported_failure" || status === "operator_reported_policy_denied",
+        content: content(data)
+      });
     } catch (cause) {
       return result({
         isError: true,

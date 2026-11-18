@@ -697,6 +697,7 @@ export const useAssetAction = () => {
       protocol: string;
       account: string;
       assetName?: string;
+      assertCurrent?: () => Promise<void>;
       orgId?: string;
       aclBatchId?: string;
       asset?: AssetItem;
@@ -718,6 +719,7 @@ export const useAssetAction = () => {
     try {
       await assertConnectMethodEnabled(body.protocol, body.connect_method, body.asset);
       const serverBody = { ...body, connect_method: await resolveServerConnectMethod(body) };
+      await meta.assertCurrent?.();
       creatingConnectionToken = true;
       const token = await createConnectionTokenWithAcl(serverBody, {
         orgId: meta.orgId,
@@ -728,7 +730,11 @@ export const useAssetAction = () => {
       });
       creatingConnectionToken = false;
       if (!isCurrentConnectionAttempt()) return;
-      if (!token) return;
+      if (!token) {
+        if (meta.assertCurrent) throw new Error("Connection cancelled");
+        return;
+      }
+      await meta.assertCurrent?.();
       syncPersonalCredentialFromToken(meta.assetId, serverBody, token, personalCredentialScope);
       if (meta.tabId) {
         markSessionTokenCreated({
@@ -801,6 +807,7 @@ export const useAssetAction = () => {
           type: "web"
         }
       };
+      await meta.assertCurrent?.();
       if (meta.onSessionReady) meta.onSessionReady(payload);
       else updateSessionPayload(meta, payload);
     } catch (error) {
@@ -1339,6 +1346,40 @@ export const useAssetAction = () => {
   });
 
   return {
+    async openGrantedSession(
+      assetId: string,
+      accountId: string,
+      protocol: "ssh" | "sftp",
+      org: string,
+      check: () => Promise<void>
+    ) {
+      const detail = await getAssetDetailRequest(assetId, org);
+      const asset = transformAssetDetail(assetId, detail);
+      const account = asset.permedAccounts?.find((a) => a.id === accountId);
+      if (
+        detail.id !== assetId ||
+        (org && detail.org_id && org !== detail.org_id) ||
+        !account ||
+        account.alias?.startsWith("@")
+      )
+        throw new Error("Authorized asset or hosted account unavailable");
+      await check();
+      const connectMethod = protocol === "ssh" ? WEB_CLI_NATIVE_METHOD : SFTP_FILE_MANAGER_VALUE;
+      const label = account.name || account.username || account.id;
+      const tab = openSession(asset, { protocol, account: label, connectMethod });
+      const meta = { tabId: tab.id, assetId, asset, assetName: asset.name, protocol, account: label, orgId: org };
+      await getBuiltinConnectSession(
+        { asset: assetId, account: accountId, protocol, connect_method: connectMethod, connect_options: {} },
+        {
+          ...meta,
+          assertCurrent: check,
+          onSessionError: (error) => {
+            markSessionFailed(meta, error instanceof Error ? error.message : "Connection failed");
+            throw new Error("Connection failed");
+          }
+        }
+      );
+    },
     displayUser,
     getAssetDetail,
     displayProtocol,

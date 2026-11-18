@@ -43,8 +43,8 @@ const choices = computed(() => [
         </template>
         {{
           zh
-            ? "删除和影响不明的 Shell 命令必须人工审核。传输时仍需选本地文件。JumpServer 审批继续生效。"
-            : "Deletion and unclassified shell commands require human approval. Transfers still use the file picker. JumpServer approvals remain in effect."
+            ? "删除和影响不明的 Shell 命令必须人工审核。文件通过专用收发目录传输。JumpServer 审批继续生效。"
+            : "Deletion and unclassified shell commands require human approval. Transfers use dedicated local folders. JumpServer approvals remain in effect."
         }}
       </template>
     </p>

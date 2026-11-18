@@ -1,6 +1,6 @@
 import type { BrowserWindow, Clipboard, Dialog } from "electron";
 import { randomUUID, createHash } from "node:crypto";
-import { open, link, unlink } from "node:fs/promises";
+import { open, link, unlink, lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { McpPermissions } from "../mcp-permissions";
 import { listenMcp } from "./http";
@@ -16,6 +16,7 @@ interface Target {
   scope: string;
 }
 interface Job {
+  opening?: boolean;
   authorizedBy?: "full" | "assisted";
   id: string;
   call: Call;
@@ -144,16 +145,6 @@ export class DesktopMcp {
       !detail.permed_accounts?.some((a) => a.id === call.accountId)
     )
       throw new Error("Linux asset or account unavailable");
-    const tokens = [...this.bindings]
-      .filter(
-        ([, t]) =>
-          t.assetId === call.assetId &&
-          t.accountId === call.accountId &&
-          t.scope === scope &&
-          t.kind === (call.op === "command" ? "ssh" : "sftp")
-      )
-      .map(([id]) => id);
-    if (!tokens.length) throw new Error("Open the matching Luna SSH or SFTP session first");
     return new Promise((resolve, reject) => {
       const id = randomUUID();
       let timer: ReturnType<typeof setTimeout>;
@@ -178,7 +169,8 @@ export class DesktopMcp {
       };
       this.notify(id);
       setTimeout(() => {
-        if (this.job?.id === id && !this.job.claimed) fail(new Error("No matching live Luna session in this window"));
+        if (this.job?.id === id && !this.job.claimed && !this.job.opening)
+          fail(new Error("Luna workspace did not receive the request"));
       }, 3000).unref();
     });
   }
@@ -194,7 +186,19 @@ export class DesktopMcp {
         () => this.live(gen),
         async () => {
           const p = await this.policy.load();
-          return p.grants.filter((g) => g.enabled);
+          return Promise.all(
+            p.grants
+              .filter((g) => g.enabled)
+              .map(async (g) => ({
+                ...g,
+                uploadDir: g.permissions.includes("upload")
+                  ? await this.policy.transferFolder(g.assetId, g.accountId, "upload")
+                  : undefined,
+                downloadDir: g.permissions.includes("download")
+                  ? await this.policy.transferFolder(g.assetId, g.accountId, "download")
+                  : undefined
+              }))
+          );
         },
         (c) => this.dispatch(c),
         this.port
@@ -239,6 +243,23 @@ export class DesktopMcp {
         );
       });
     }
+    if (cmd === "mcp_open_target" || cmd === "mcp_open_check") {
+      if (j.claimed || (cmd === "mcp_open_target" && j.opening) || (cmd === "mcp_open_check" && !j.opening))
+        throw new Error("Expired connection attempt");
+      j.opening = true;
+      return {
+        assetId: j.call.assetId,
+        accountId: j.call.accountId,
+        orgId: this.auth().currentSession().orgId || "",
+        protocol: j.call.op === "command" ? "ssh" : "sftp"
+      };
+    }
+    if (cmd === "mcp_open_failed" && j.opening && !j.claimed) {
+      j.reject(
+        new Error("Could not open the authorized Luna session. Check the connection tab and JumpServer approval.")
+      );
+      return;
+    }
     if (cmd === "mcp_claim") {
       const t = this.bindings.get(args.token);
       if (
@@ -274,18 +295,24 @@ export class DesktopMcp {
           if (choice.response !== 1) throw new Error("Declined in Luna");
         }
         await this.checked(j);
-        const targetLabel = `${grant.assetName} · ${grant.accountName} · ${value}`;
         let data: string | undefined;
         if (op === "upload") {
-          const pick = await this.dialog.showOpenDialog(win, {
-            properties: ["openFile"],
-            title: `选择上传文件（最多 1 MiB） → ${targetLabel}`
-          });
-          if (pick.canceled) throw new Error("Upload cancelled");
-          const file = await open(pick.filePaths[0], "r");
+          const dir = await this.policy.transferFolder(assetId, accountId, "upload");
+          const source = path.join(dir, path.posix.basename(value));
+          const before = await lstat(source, { bigint: true });
+          if (!before.isFile() || before.nlink !== 1n || path.relative(source, await realpath(source)))
+            throw new Error("Use a regular staged file");
+          const file = await open(source, "r");
           try {
-            const stat = await file.stat();
-            if (!stat.isFile() || stat.size > limit) throw new Error("Invalid upload or file exceeds 1 MiB");
+            const stat = await file.stat({ bigint: true });
+            if (
+              stat.ino !== before.ino ||
+              stat.dev !== before.dev ||
+              stat.nlink !== 1n ||
+              !stat.isFile() ||
+              stat.size > limit
+            )
+              throw new Error("Invalid upload or file exceeds 1 MiB");
             const bytes = Buffer.alloc(limit + 1);
             let size = 0;
             while (size < bytes.length) {
@@ -293,18 +320,16 @@ export class DesktopMcp {
               if (!r.bytesRead) break;
               size += r.bytesRead;
             }
-            if (size !== stat.size) throw new Error("Upload source changed");
+            if (size !== Number(stat.size)) throw new Error("Upload source changed");
             data = bytes.subarray(0, size).toString("base64");
           } finally {
             await file.close();
           }
         } else if (op === "download") {
-          const pick = await this.dialog.showSaveDialog(win, {
-            title: `选择新的下载文件名 ← ${targetLabel}`,
-            defaultPath: path.posix.basename(value)
-          });
-          if (pick.canceled || !pick.filePath) throw new Error("Download cancelled");
-          j.destination = pick.filePath;
+          j.destination = path.join(
+            await this.policy.transferFolder(assetId, accountId, "download"),
+            path.posix.basename(value)
+          );
         }
         await this.checked(j);
         return { ...j.call, data, autoDiagnostics: op === "command" && Boolean(j.authorizedBy) };
@@ -327,6 +352,11 @@ export class DesktopMcp {
           throw new Error("Invalid download");
         const bytes = Buffer.from(result.data, "base64");
         if (bytes.length > limit) throw new Error("Download exceeds limit");
+        if (
+          path.dirname(j.destination) !==
+          (await this.policy.transferFolder(j.call.assetId, j.call.accountId, "download"))
+        )
+          throw new Error("Download folder changed");
         const temp = path.join(path.dirname(j.destination), `.luna-${randomUUID()}.part`);
         const file = await open(temp, "wx");
         try {
@@ -342,6 +372,7 @@ export class DesktopMcp {
         }
         result = {
           status: "downloaded",
+          localPath: j.destination,
           bytes: bytes.length,
           sha256: createHash("sha256").update(bytes).digest("hex")
         };
