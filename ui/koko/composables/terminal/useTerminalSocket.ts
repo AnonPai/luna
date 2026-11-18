@@ -55,6 +55,8 @@ import { formatMessage, preprocessInput } from "#koko/utils/terminalUtils";
 import { useMobile } from "~/composables/useMobile";
 import { normalizeConnectionFailure } from "~/utils/connectionFailure";
 import { createKokoStartupOutputCapture, describeTerminalClose, resolveKokoTerminalCloseMessage } from "./protocol";
+import { registerMcpEndpoint } from "~/features/mcp/sessions";
+import { mcpTerminalOperation } from "~/features/mcp/terminal";
 
 const isSocketOpen = (socket: WebSocket) => socket.readyState === WebSocket.OPEN;
 
@@ -235,6 +237,14 @@ export const useKokoTerminalSocket = () => {
     socket.send(formatMessage(terminalId.value, FORMATTER_MESSAGE_TYPE.TERMINAL_DATA, data));
     return true;
   };
+
+  registerMcpEndpoint(() => {
+    const ctx = unref(sessionCtxRef);
+    if (!sessionReady || ctx?.terminalProfile?.protocol !== "ssh" || ctx.wsQuery?.type || !socketRef.value ||
+      !isSocketOpen(socketRef.value) || terminalInputLocked() || terminalAiBusy() || zmodem.isActiveSession() ||
+      !containerRef.value?.getBoundingClientRect().width) return undefined;
+    return ctx.tokenId;
+  }, mcpTerminalOperation(() => terminalRef.value, sendExternalTerminalData, toast));
 
   const input = useKokoTerminalInput({
     container: containerRef,

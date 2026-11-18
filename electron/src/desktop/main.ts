@@ -52,6 +52,7 @@ import { parseUrl, toFetchUrl } from "../shared/url";
 import { createWebProxyManager } from "@jumpserver/web-proxy/manager";
 import { resolveExecutablePath } from "./executable-path";
 import { McpPermissions } from "./mcp-permissions";
+import { DesktopMcp } from "./mcp/desktop";
 
 const electronDir = __dirname;
 const appRoot = app.getAppPath();
@@ -83,9 +84,8 @@ let trayRecentConnections = [];
 let trayQuickConnectEnabled = false;
 let applicationConfig;
 let authService;
-const mcpPermissions = new McpPermissions(path.join(app.getPath("userData"), "mcp-permissions"), () =>
-  authService.currentSession()
-);
+const mcpPermissions = new McpPermissions(path.join(app.getPath("userData"), "mcp-permissions"), () => authService.currentSession());
+const localMcp = new DesktopMcp(mcpPermissions, () => authService, id => emitDesktopEvent("mcp-request", id, "main"), dialog, clipboard);
 let localApplicationLauncher;
 let offlineRecordings;
 let replayTranscoder;
@@ -1029,6 +1029,9 @@ async function handleInvoke(event, request) {
   const { command, args = {}, options = {} } = request || {};
   const win = windowForEvent(event);
 
+  if (command.startsWith("mcp_") && (win !== windows.get("main") || event.senderFrame !== event.sender.mainFrame ||
+      (!isDevelopment && !event.senderFrame.url.startsWith("jms-app://app/")))) throw new Error("MCP requires the main Luna window");
+  if (command.startsWith("mcp_") && !command.startsWith("mcp_permissions_")) return localMcp.control(command,args,win);
   if (command === "mcp_permissions_load" || command === "mcp_permissions_save") {
     const session = authService.currentSession();
     if (session.sessionKey !== args.account || (session.orgId || "") !== args.org) throw new Error("MCP identity changed");
@@ -1211,8 +1214,17 @@ async function handleInvoke(event, request) {
     }));
   }
 
-  if (command === "set_api_session") return authService.setSession(args);
-  if (command === "set_api_org") return authService.setCurrentOrg(args.orgId);
+  if (command === "set_api_session") {
+    const before = authService.sessions.get(authService.currentSessionKey);
+    const result = authService.setSession(args);
+    const after = authService.sessions.get(authService.currentSessionKey);
+    if (before?.sessionKey !== after?.sessionKey || before?.origin !== after?.origin || before?.orgId !== after?.orgId || args.connectionId !== undefined) localMcp.reset();
+    return result;
+  }
+  if (command === "set_api_org") {
+    if (authService.currentSession().orgId !== args.orgId) localMcp.reset();
+    return authService.setCurrentOrg(args.orgId);
+  }
   if (command === "sync_backend_language") return authService.syncBackendLanguage(args);
   if (command === "init_http_callback_server") return authService.startCallbackServer();
   if (command === "auth_login") return withIpcErrorLog("auth_login", () => authService.authLogin(args));
@@ -1220,7 +1232,7 @@ async function handleInvoke(event, request) {
   if (command === "list_authenticated_accounts") return authService.listAuthenticatedAccounts();
   if (command === "bootstrap_auth_session")
     return withIpcErrorLog("bootstrap_auth_session", () => authService.bootstrapAuthSession(args));
-  if (command === "api_request") return authService.apiRequest(args.request);
+  if (command === "api_request") return localMcp.observe(args.request, () => authService.apiRequest(args.request));
   if (command === "api_stream_start") return startApiStream(event, win, args);
   if (command === "api_stream_cancel") return cancelApiStream(event, args);
   if (command === "face_engine_status") return faceEngine.status();
@@ -1267,7 +1279,10 @@ async function handleInvoke(event, request) {
     }
     return withIpcErrorLog(command, () => webProxyManager.invoke(command, event, win, args));
   }
-  if (command === "logout") return withIpcErrorLog("logout", () => authService.logout(args));
+  if (command === "logout") {
+    localMcp.reset();
+    return withIpcErrorLog("logout", () => authService.logout(args));
+  }
   if (command === "open_settings_window") {
     emitDesktopEvent("settings-navigate", args.path || "/setting/general", labelForWindow(win));
     return null;

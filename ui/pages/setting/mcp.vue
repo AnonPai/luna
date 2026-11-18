@@ -2,6 +2,7 @@
 import type { AssetDetail } from "~/types";
 import { getAssetDetailRequest, getAuthorizedAssets } from "~/composables/useApiRequest";
 import messages from "~/features/mcp/messages.json";
+import McpServiceControl from "~/features/mcp/ServiceControl.vue";
 import { desktopInvoke } from "~/shared/desktop/bridge";
 import { useUserInfoStore } from "~/store/modules/userInfo";
 
@@ -178,6 +179,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-if="available" class="space-y-6">
+    <McpServiceControl />
     <p v-if="error" role="alert" class="text-error">
       {{ error }}
       <UButton color="neutral" variant="link" :disabled="saving" @click="refresh">{{ t("Mcp.Reload") }}</UButton>

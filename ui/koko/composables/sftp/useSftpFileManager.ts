@@ -15,6 +15,8 @@ import { useSftpOperations } from "./useSftpOperations";
 import { useSftpRetry } from "./useSftpRetry";
 import { useSftpSocket } from "./useSftpSocket";
 import { useSftpTransferEndpoint } from "./useSftpTransferEndpoint";
+import { registerMcpEndpoint } from "~/features/mcp/sessions";
+import { mcpFileOperations } from "~/features/mcp/files";
 
 export type { SftpFileEntry } from "./protocol";
 
@@ -168,6 +170,11 @@ export function useSftpFileManager(ctx: Ref<ConnectorSessionContext | null>, tra
         () => capabilities.value?.transfer_binary === true
       )
     : null;
+
+  if (transferEndpoint) registerMcpEndpoint(
+    () => socket.connected.value && !fatalError.value ? activeContext.value?.tokenId : undefined,
+    mcpFileOperations(transferEndpoint, path => operationClient.operations.listDirectory(path, {background:true}))
+  );
 
   function changeDirectory(entry: SftpFileEntry) {
     const path =
